@@ -10,7 +10,7 @@
 //! [Learn more](https://developers.cloudflare.com/workers/learning/using-durable-objects) about
 //! using Durable Objects.
 
-use std::{ops::Deref, time::Duration};
+use std::{fmt::Display, ops::Deref, time::Duration};
 
 use crate::{
     date::Date,
@@ -40,17 +40,20 @@ pub struct Stub {
     inner: EdgeDurableObject,
 }
 
+unsafe impl Send for Stub {}
+unsafe impl Sync for Stub {}
+
 impl Stub {
     /// Send an internal Request to the Durable Object to which the stub points.
     pub async fn fetch_with_request(&self, req: Request) -> Result<Response> {
-        let promise = self.inner.fetch_with_request(req.inner());
+        let promise = self.inner.fetch_with_request(req.inner())?;
         let response = JsFuture::from(promise).await?;
         Ok(response.dyn_into::<web_sys::Response>()?.into())
     }
 
     /// Construct a Request from a URL to the Durable Object to which the stub points.
     pub async fn fetch_with_str(&self, url: &str) -> Result<Response> {
-        let promise = self.inner.fetch_with_str(url);
+        let promise = self.inner.fetch_with_str(url)?;
         let response = JsFuture::from(promise).await?;
         Ok(response.dyn_into::<web_sys::Response>()?.into())
     }
@@ -59,9 +62,13 @@ impl Stub {
 /// Use an ObjectNamespace to get access to Stubs for communication with a Durable Object instance.
 /// A given namespace can support essentially unlimited Durable Objects, with each Object having
 /// access to a transactional, key-value storage API.
+#[derive(Clone)]
 pub struct ObjectNamespace {
     inner: EdgeObjectNamespace,
 }
+
+unsafe impl Send for ObjectNamespace {}
+unsafe impl Sync for ObjectNamespace {}
 
 impl ObjectNamespace {
     /// This method derives a unique object ID from the given name string. It will always return the
@@ -115,7 +122,7 @@ impl ObjectNamespace {
     /// currently compatible with ids created by `id_from_name()`.
     ///
     /// See supported jurisdictions and more documentation at:
-    /// <https://developers.cloudflare.com/workers/runtime-apis/durable-objects#restricting-objects-to-a-jurisdiction>
+    /// <https://developers.cloudflare.com/durable-objects/reference/data-location/#restrict-durable-objects-to-a-jurisdiction>
     pub fn unique_id_with_jurisdiction(&self, jd: &str) -> Result<ObjectId> {
         let options = Object::new();
         js_sys::Reflect::set(&options, &JsValue::from("jurisdiction"), &jd.into())?;
@@ -148,11 +155,33 @@ impl ObjectId<'_> {
             })
             .map_err(Error::from)
     }
+
+    pub fn get_stub_with_location_hint(&self, location_hint: &str) -> Result<Stub> {
+        let options = Object::new();
+        js_sys::Reflect::set(
+            &options,
+            &JsValue::from("locationHint"),
+            &location_hint.into(),
+        )?;
+
+        self.namespace
+            .ok_or_else(|| JsValue::from("Cannot get stub from within a Durable Object"))
+            .and_then(|n| {
+                Ok(Stub {
+                    inner: n.inner.get_with_options(&self.inner, &options)?,
+                })
+            })
+            .map_err(Error::from)
+    }
 }
 
-impl ToString for ObjectId<'_> {
-    fn to_string(&self) -> String {
-        self.inner.to_string()
+impl Display for ObjectId<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(
+            f,
+            "{}",
+            self.inner.to_string().map_err(|_| { std::fmt::Error })?
+        )
     }
 }
 
@@ -167,7 +196,7 @@ impl State {
     /// method.
     pub fn id(&self) -> ObjectId<'_> {
         ObjectId {
-            inner: self.inner.id(),
+            inner: self.inner.id().unwrap(),
             namespace: None,
         }
     }
@@ -176,7 +205,7 @@ impl State {
     /// [Transactional Storage API](https://developers.cloudflare.com/workers/runtime-apis/durable-objects#transactional-storage-api) for a detailed reference.
     pub fn storage(&self) -> Storage {
         Storage {
-            inner: self.inner.storage(),
+            inner: self.inner.storage().unwrap(),
         }
     }
 
@@ -184,10 +213,12 @@ impl State {
     where
         F: Future<Output = ()> + 'static,
     {
-        self.inner.wait_until(&future_to_promise(async {
-            future.await;
-            Ok(JsValue::UNDEFINED)
-        }))
+        self.inner
+            .wait_until(&future_to_promise(async {
+                future.await;
+                Ok(JsValue::UNDEFINED)
+            }))
+            .unwrap()
     }
 
     // needs to be accessed by the `durable_object` macro in a conversion step
@@ -196,18 +227,21 @@ impl State {
     }
 
     pub fn accept_web_socket(&self, ws: &WebSocket) {
-        self.inner.accept_websocket(ws.as_ref())
+        self.inner.accept_websocket(ws.as_ref()).unwrap()
     }
 
     pub fn accept_websocket_with_tags(&self, ws: &WebSocket, tags: &[&str]) {
         let tags = tags.iter().map(|it| (*it).into()).collect();
 
-        self.inner.accept_websocket_with_tags(ws.as_ref(), tags);
+        self.inner
+            .accept_websocket_with_tags(ws.as_ref(), tags)
+            .unwrap();
     }
 
     pub fn get_websockets(&self) -> Vec<WebSocket> {
         self.inner
             .get_websockets()
+            .unwrap()
             .into_iter()
             .map(Into::into)
             .collect()
@@ -216,6 +250,7 @@ impl State {
     pub fn get_websockets_with_tag(&self, tag: &str) -> Vec<WebSocket> {
         self.inner
             .get_websockets_with_tag(tag)
+            .unwrap()
             .into_iter()
             .map(Into::into)
             .collect()
@@ -223,7 +258,7 @@ impl State {
 
     /// Retrieve tags from a hibernatable websocket
     pub fn get_tags(&self, websocket: &WebSocket) -> Vec<String> {
-        self.inner.get_tags(websocket.as_ref())
+        self.inner.get_tags(websocket.as_ref()).unwrap()
     }
 }
 

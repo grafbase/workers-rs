@@ -1,9 +1,11 @@
+use std::fmt::Display;
+
 #[cfg(feature = "d1")]
 use crate::d1::D1Database;
-use crate::error::Error;
 #[cfg(feature = "queue")]
 use crate::Queue;
 use crate::{durable::ObjectNamespace, Bucket, DynamicDispatcher, Fetcher, Result};
+use crate::{error::Error, hyperdrive::Hyperdrive};
 
 use js_sys::Object;
 use wasm_bindgen::{prelude::*, JsCast, JsValue};
@@ -83,6 +85,10 @@ impl Env {
     pub fn d1(&self, binding: &str) -> Result<D1Database> {
         self.get_binding(binding)
     }
+
+    pub fn hyperdrive(&self, binding: &str) -> Result<Hyperdrive> {
+        self.get_binding(binding)
+    }
 }
 
 pub trait EnvBinding: Sized + JsCast {
@@ -141,9 +147,9 @@ impl From<StringBinding> for JsValue {
     }
 }
 
-impl ToString for StringBinding {
-    fn to_string(&self) -> String {
-        self.0.as_string().unwrap_or_default()
+impl Display for StringBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(f, "{}", self.0.as_string().unwrap_or_default())
     }
 }
 

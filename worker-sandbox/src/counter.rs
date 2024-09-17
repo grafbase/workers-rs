@@ -34,10 +34,10 @@ impl DurableObject for Counter {
                 .serialize_attachment("hello")
                 .expect("failed to serialize attachment");
 
-            return Ok(Response::empty()
-                .unwrap()
+            return Ok(ResponseBuilder::new()
                 .with_status(101)
-                .with_websocket(Some(pair.client)));
+                .with_websocket(pair.client)
+                .empty());
         }
 
         self.count += 10;
@@ -46,7 +46,7 @@ impl DurableObject for Counter {
         Response::ok(format!(
             "[durable_object]: self.count: {}, secret value: {}",
             self.count,
-            self.env.secret("SOME_SECRET")?.to_string()
+            self.env.secret("SOME_SECRET")?
         ))
     }
 

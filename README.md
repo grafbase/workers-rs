@@ -38,7 +38,35 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
 }
 ```
 
-### `http` Feature
+## Getting Started
+
+The project uses [wrangler](https://github.com/cloudflare/workers-sdk/tree/main/packages/wrangler) for running and publishing your Worker.
+
+Use [cargo generate](https://github.com/cargo-generate/cargo-generate) to start from a template:
+
+```bash
+$ cargo generate cloudflare/workers-rs
+```
+
+There are several templates to chose from. You should see a new project layout with a `src/lib.rs`. 
+Start there! Use any local or remote crates and modules (as long as they compile to the `wasm32-unknown-unknown` target).
+
+Once you're ready to run your project, run your worker locally:
+
+```bash
+npx wrangler dev
+```
+
+Finally, go live:
+
+```bash
+# configure your routes, zones & more in your worker's `wrangler.toml` file
+npx wrangler deploy
+```
+
+If you would like to have `wrangler` installed on your machine, see instructions in [wrangler repository](https://github.com/cloudflare/workers-sdk/tree/main/packages/wrangler).
+
+## `http` Feature
 
 `worker` `0.0.21` introduced an `http` feature flag which starts to replace custom types with widely used types from the [`http`](https://docs.rs/http/latest/http/) crate.
 
@@ -81,6 +109,7 @@ Parameterize routes and access the parameter values from within a handler. Each 
 `Request`, and a `RouteContext`. The `RouteContext` has shared data, route params, `Env` bindings, and more.
 
 ```rust
+use serde::{Deserialize, Serialize};
 use worker::*;
 
 #[event(fetch)]
@@ -142,39 +171,9 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
 }
 ```
 
-## Getting Started
-
-The project uses [wrangler](https://github.com/cloudflare/wrangler2) version 2.x for running and publishing your Worker.
-
-Git clone the Rust Worker project [template](https://github.com/cloudflare/workers-sdk/tree/main/templates/experimental/worker-rust) and install its dependencies.
-
-You should see a new project layout with a `src/lib.rs`. Start there! Use any local or remote crates
-and modules (as long as they compile to the `wasm32-unknown-unknown` target).
-
-Once you're ready to run your project:
-
-First check that the wrangler version is 2.x
-```bash
-npx wrangler --version
-```
-
-Then, run your worker
-
-```bash
-npx wrangler dev
-```
-
-Finally, go live:
-
-```bash
-# configure your routes, zones & more in your worker's `wrangler.toml` file
-npx wrangler publish
-```
-
-If you would like to have `wrangler` installed on your machine, see instructions in [wrangler repository](https://github.com/cloudflare/wrangler2).
 ## Durable Object, KV, Secret, & Variable Bindings
 
-All "bindings" to your script (Durable Object & KV Namespaces, Secrets, and Variables) are
+All "bindings" to your script (Durable Object & KV Namespaces, Secrets, Variables and Version) are
 accessible from the `env` parameter provided to both the entrypoint (`main` in this example), and to
 the route handler callback (in the `ctx` argument), if you use the `Router` from the `worker` crate.
 
@@ -215,6 +214,7 @@ For more information about how to configure these bindings, see:
 
 - https://developers.cloudflare.com/workers/cli-wrangler/configuration#keys
 - https://developers.cloudflare.com/workers/learning/using-durable-objects#configuring-durable-object-bindings
+- https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/
 
 ## Durable Objects
 
@@ -343,6 +343,45 @@ max_batch_timeout = 30
 queue = "myqueue"
 binding = "my_queue"
 ```
+
+## RPC Support
+
+`workers-rs` has experimental support for [Workers RPC](https://developers.cloudflare.com/workers/runtime-apis/rpc/).
+For now, this relies on JavaScript bindings and may require some manual usage of `wasm-bindgen`. 
+
+Not all features of RPC are supported yet (or have not been tested), including:
+- Function arguments and return values
+- Class instances
+- Stub forwarding
+
+### RPC Server
+
+Writing an RPC server with `workers-rs` is relatively simple. Simply export methods using `wasm-bindgen`. These
+will be automatically detected by `worker-build` and made available to other Workers. See
+[example](./examples/rpc-server).
+
+### RPC Client
+
+Creating types and bindings for invoking another Worker's RPC methods is a bit more involved. You will need to
+write more complex `wasm-bindgen` bindings and some boilerplate to make interacting with the RPC methods more
+idiomatic. See [example](./examples/rpc-client/src/calculator.rs).
+
+With manually written bindings, it should be possible to support non-primitive argument and return types, using
+`serde-wasm-bindgen`. 
+
+### Generating Client Bindings
+
+There are many routes that can be taken to describe RPC interfaces. Under the hood, Workers RPC uses
+[Cap'N Proto](https://capnproto.org/). A possible future direction is for Wasm guests to include Cap'N Proto
+serde support and speak directly to the RPC protocol, bypassing JavaScript. This would likely involve defining 
+the RPC interface in Cap'N Proto schema and generating Rust code from that.
+
+Another popular interface schema in the WebAssembly community is
+[WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md). This is a lightweight format
+designed for the WebAssembly Component model. `workers-rs` includes an **experimental** code generator which 
+allows you to describe your RPC interface using WIT and generate JavaScript bindings as shown in the 
+[rpc-client example](./examples/rpc-client/wit/calculator.wit). The easiest way to use this code generator is using a [build script](./examples/rpc-client/build.rs) as shown in the example.
+This code generator is pre-alpha, with no support guarantee, and implemented only for primitive types at this time. 
 
 ## Testing with Miniflare
 

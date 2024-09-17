@@ -6,7 +6,7 @@ use crate::{
 use std::convert::TryInto;
 use std::sync::atomic::Ordering;
 
-use worker::{console_log, Env, Fetch, Headers, Request, Response, Result};
+use worker::{console_log, Env, Fetch, Request, Response, ResponseBuilder, Result};
 
 #[cfg(not(feature = "http"))]
 use worker::{RouteContext, Router};
@@ -152,6 +152,10 @@ pub fn make_router(data: SomeSharedData, env: Env) -> axum::Router {
             get(handler!(request::handle_cloned_stream)),
         )
         .route("/cloned-fetch", get(handler!(fetch::handle_cloned_fetch)))
+        .route(
+            "/cloned-response",
+            get(handler!(fetch::handle_cloned_response_attributes)),
+        )
         .route("/wait/:delay", get(handler!(request::handle_wait_delay)))
         .route(
             "/custom-response-body",
@@ -191,6 +195,16 @@ pub fn make_router(data: SomeSharedData, env: Env) -> axum::Router {
         .route("/d1/dump", get(handler!(d1::dump)))
         .route("/d1/exec", post(handler!(d1::exec)))
         .route("/d1/error", get(handler!(d1::error)))
+        .route("/kv/get", get(handler!(kv::get)))
+        .route("/kv/get-not-found", get(handler!(kv::get_not_found)))
+        .route("/kv/list-keys", get(handler!(kv::list_keys)))
+        .route("/kv/put-simple", get(handler!(kv::put_simple)))
+        .route("/kv/put-metadata", get(handler!(kv::put_metadata)))
+        .route(
+            "/kv/put-metadata-struct",
+            get(handler!(kv::put_metadata_struct)),
+        )
+        .route("/kv/put-expiration", get(handler!(kv::put_expiration)))
         .route("/r2/list-empty", get(handler!(r2::list_empty)))
         .route("/r2/list", get(handler!(r2::list)))
         .route("/r2/get-empty", get(handler!(r2::get_empty)))
@@ -290,6 +304,10 @@ pub fn make_router<'a>(data: SomeSharedData) -> Router<'a, SomeSharedData> {
         .get_async("/cloned", handler!(request::handle_cloned))
         .get_async("/cloned-stream", handler!(request::handle_cloned_stream))
         .get_async("/cloned-fetch", handler!(fetch::handle_cloned_fetch))
+        .get_async(
+            "/cloned-response",
+            handler!(fetch::handle_cloned_response_attributes),
+        )
         .get_async("/wait/:delay", handler!(request::handle_wait_delay))
         .get_async(
             "/custom-response-body",
@@ -317,6 +335,13 @@ pub fn make_router<'a>(data: SomeSharedData) -> Router<'a, SomeSharedData> {
         .get_async("/d1/dump", handler!(d1::dump))
         .post_async("/d1/exec", handler!(d1::exec))
         .get_async("/d1/error", handler!(d1::error))
+        .get_async("/kv/get", handler!(kv::get))
+        .get_async("/kv/get-not-found", handler!(kv::get_not_found))
+        .get_async("/kv/list-keys", handler!(kv::list_keys))
+        .get_async("/kv/put-simple", handler!(kv::put_simple))
+        .get_async("/kv/put-metadata", handler!(kv::put_metadata))
+        .get_async("/kv/put-metadata-struct", handler!(kv::put_metadata_struct))
+        .get_async("/kv/put-expiration", handler!(kv::put_expiration))
         .get_async("/r2/list-empty", handler!(r2::list_empty))
         .get_async("/r2/list", handler!(r2::list))
         .get_async("/r2/get-empty", handler!(r2::get_empty))
@@ -331,19 +356,15 @@ pub fn make_router<'a>(data: SomeSharedData) -> Router<'a, SomeSharedData> {
 }
 
 fn respond(req: Request, _env: Env, _data: SomeSharedData) -> Result<Response> {
-    Response::ok(format!("Ok: {}", String::from(req.method()))).map(|resp| {
-        let mut headers = Headers::new();
-        headers.set("x-testing", "123").unwrap();
-        resp.with_headers(headers)
-    })
+    ResponseBuilder::new()
+        .with_header("x-testing", "123")?
+        .ok(format!("Ok: {}", String::from(req.method())))
 }
 
 async fn respond_async(req: Request, _env: Env, _data: SomeSharedData) -> Result<Response> {
-    Response::ok(format!("Ok (async): {}", String::from(req.method()))).map(|resp| {
-        let mut headers = Headers::new();
-        headers.set("x-testing", "123").unwrap();
-        resp.with_headers(headers)
-    })
+    ResponseBuilder::new()
+        .with_header("x-testing", "123")?
+        .ok(format!("Ok (async): {}", String::from(req.method())))
 }
 
 #[worker::send]
@@ -365,10 +386,12 @@ async fn catchall(req: Request, _env: Env, _data: SomeSharedData) -> Result<Resp
     let path = uri.path();
     console_log!("[or_else_any_method_async] caught: {}", path);
 
-    Fetch::Url("https://github.com/404".parse().unwrap())
+    let (builder, body) = Fetch::Url("https://github.com/404".parse().unwrap())
         .send()
-        .await
-        .map(|resp| resp.with_status(404))
+        .await?
+        .into_parts();
+
+    Ok(builder.with_status(404).body(body))
 }
 
 async fn handle_options_catchall(

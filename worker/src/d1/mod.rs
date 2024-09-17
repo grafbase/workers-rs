@@ -33,12 +33,12 @@ unsafe impl Send for D1Database {}
 impl D1Database {
     /// Prepare a query statement from a query string.
     pub fn prepare<T: Into<String>>(&self, query: T) -> D1PreparedStatement {
-        self.0.prepare(&query.into()).into()
+        self.0.prepare(&query.into()).unwrap().into()
     }
 
     /// Dump the data in the database to a `Vec`.
     pub async fn dump(&self) -> Result<Vec<u8>> {
-        let result = JsFuture::from(self.0.dump()).await;
+        let result = JsFuture::from(self.0.dump()?).await;
         let array_buffer = cast_to_d1_error(result)?;
         let array_buffer = array_buffer.dyn_into::<ArrayBuffer>()?;
         let array = Uint8Array::new(&array_buffer);
@@ -50,7 +50,7 @@ impl D1Database {
     /// Returns the results in the same order as the provided statements.
     pub async fn batch(&self, statements: Vec<D1PreparedStatement>) -> Result<Vec<D1Result>> {
         let statements = statements.into_iter().map(|s| s.0).collect::<Array>();
-        let results = JsFuture::from(self.0.batch(statements)).await;
+        let results = JsFuture::from(self.0.batch(statements)?).await;
         let results = cast_to_d1_error(results)?;
         let results = results.dyn_into::<Array>()?;
         let mut vec = Vec::with_capacity(results.length() as usize);
@@ -74,7 +74,7 @@ impl D1Database {
     /// If an error occurs, an exception is thrown with the query and error
     /// messages, execution stops and further statements are not executed.
     pub async fn exec(&self, query: &str) -> Result<D1ExecResult> {
-        let result = JsFuture::from(self.0.exec(query)).await;
+        let result = JsFuture::from(self.0.exec(query)?).await;
         let result = cast_to_d1_error(result)?;
         Ok(result.into())
     }
@@ -244,11 +244,10 @@ impl D1PreparedStatement {
 
     /// Bind one or more parameters to the statement.
     /// Returns a new statement with the bound parameters, leaving the old statement available for reuse.
-    pub fn bind_refs<'a, T, U: 'a>(&self, values: T) -> Result<Self>
-    where
-        T: IntoIterator<Item = &'a U>,
-        U: D1Argument,
-    {
+    pub fn bind_refs<'a, T: IntoIterator<Item = &'a U>, U: D1Argument + 'a>(
+        &self,
+        values: T,
+    ) -> Result<Self> {
         let array: Array = values.into_iter().map(|t| t.js_value()).collect::<Array>();
 
         match self.0.bind(array) {
@@ -259,12 +258,15 @@ impl D1PreparedStatement {
 
     /// Bind a batch of parameter values, returning a batch of prepared statements.
     /// Result can be passed to [`D1Database::batch`] to execute the statements.
-    pub fn batch_bind<'a, U: 'a, T: 'a, V: 'a>(&self, values: T) -> Result<Vec<Self>>
-    where
-        T: IntoIterator<Item = U>,
-        U: IntoIterator<Item = &'a V>,
-        V: D1Argument,
-    {
+    pub fn batch_bind<
+        'a,
+        U: IntoIterator<Item = &'a V> + 'a,
+        T: IntoIterator<Item = U> + 'a,
+        V: D1Argument + 'a,
+    >(
+        &self,
+        values: T,
+    ) -> Result<Vec<Self>> {
         values
             .into_iter()
             .map(|batch| self.bind_refs(batch))
@@ -282,7 +284,7 @@ impl D1PreparedStatement {
     where
         T: for<'a> Deserialize<'a>,
     {
-        let result = JsFuture::from(self.0.first(col_name)).await;
+        let result = JsFuture::from(self.0.first(col_name)?).await;
         let js_value = cast_to_d1_error(result)?;
         let value = serde_wasm_bindgen::from_value(js_value)?;
         Ok(value)
@@ -290,14 +292,14 @@ impl D1PreparedStatement {
 
     /// Executes a query against the database but only return metadata.
     pub async fn run(&self) -> Result<D1Result> {
-        let result = JsFuture::from(self.0.run()).await;
+        let result = JsFuture::from(self.0.run()?).await;
         let result = cast_to_d1_error(result)?;
         Ok(D1Result(result.into()))
     }
 
     /// Executes a query against the database and returns all rows and metadata.
     pub async fn all(&self) -> Result<D1Result> {
-        let result = JsFuture::from(self.0.all()).await?;
+        let result = JsFuture::from(self.0.all()?).await?;
         Ok(D1Result(result.into()))
     }
 
@@ -306,7 +308,7 @@ impl D1PreparedStatement {
     where
         T: for<'a> Deserialize<'a>,
     {
-        let result = JsFuture::from(self.0.raw()).await;
+        let result = JsFuture::from(self.0.raw()?).await;
         let result = cast_to_d1_error(result)?;
         let result = result.dyn_into::<Array>()?;
         let mut vec = Vec::with_capacity(result.length() as usize);
@@ -319,7 +321,7 @@ impl D1PreparedStatement {
 
     /// Executes a query against the database and returns a `Vec` of JsValues.
     pub async fn raw_js_value(&self) -> Result<Vec<JsValue>> {
-        let result = JsFuture::from(self.0.raw()).await;
+        let result = JsFuture::from(self.0.raw()?).await;
         let result = cast_to_d1_error(result)?;
         let array = result.dyn_into::<Array>()?;
 
@@ -341,17 +343,29 @@ impl From<D1PreparedStatementSys> for D1PreparedStatement {
 // The result of a D1 query execution.
 pub struct D1Result(D1ResultSys);
 
+// The meta object of D1 result.
+#[derive(Debug, Clone, Deserialize)]
+pub struct D1ResultMeta {
+    pub changed_db: Option<bool>,
+    pub changes: Option<usize>,
+    pub duration: Option<f64>,
+    pub last_row_id: Option<i64>,
+    pub rows_read: Option<usize>,
+    pub rows_written: Option<usize>,
+    pub size_after: Option<usize>,
+}
+
 impl D1Result {
     /// Returns `true` if the result indicates a success, otherwise `false`.
     pub fn success(&self) -> bool {
-        self.0.success()
+        self.0.success().unwrap()
     }
 
     /// Return the error contained in this result.
     ///
     /// Returns `None` if the result indicates a success.
     pub fn error(&self) -> Option<String> {
-        self.0.error()
+        self.0.error().unwrap()
     }
 
     /// Retrieve the collection of result objects, or an `Err` if an error occurred.
@@ -359,7 +373,7 @@ impl D1Result {
     where
         T: for<'a> Deserialize<'a>,
     {
-        if let Some(results) = self.0.results() {
+        if let Some(results) = self.0.results()? {
             let mut vec = Vec::with_capacity(results.length() as usize);
             for result in results.iter() {
                 let result = serde_wasm_bindgen::from_value(result).unwrap();
@@ -368,6 +382,18 @@ impl D1Result {
             Ok(vec)
         } else {
             Ok(Vec::new())
+        }
+    }
+
+    /// Return the meta data in this result.
+    ///
+    /// Returns `None` if `meta` field is not populated.
+    pub fn meta(&self) -> Result<Option<D1ResultMeta>> {
+        if let Ok(meta) = self.0.meta() {
+            let meta: D1ResultMeta = serde_wasm_bindgen::from_value(meta.into())?;
+            Ok(Some(meta))
+        } else {
+            Ok(None)
         }
     }
 }
